@@ -23,7 +23,7 @@
 #  Time: ~15-30 minutes (mostly waiting for downloads)
 # ============================================================
 
-set -uo pipefail  # Catch undefined vars and pipe errors but not every non-zero exit
+set -o pipefail  # Catch pipe errors without being too aggressive on unset vars
 
 # ─────────────────────────────────────────
 # COLORS & FORMATTING
@@ -221,46 +221,60 @@ fi
 print_success "Docker Compose OK"
 
 # ─────────────────────────────────────────
-# STEP 3 — CREATE FOLDER STRUCTURE
+# STEP 3 — INSTALL GIT IF NEEDED
 # ─────────────────────────────────────────
-print_step "STEP 3/8 — Creating Server Folders"
+print_step "STEP 3/8 — Checking Dependencies"
 
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR/config"
-mkdir -p "$INSTALL_DIR/logs"
-mkdir -p "$INSTALL_DIR/data"
-
-print_success "Created $INSTALL_DIR/"
-print_success "Created $INSTALL_DIR/config/"
-print_success "Created $INSTALL_DIR/logs/"
-
-# ─────────────────────────────────────────
-# STEP 4 — DOWNLOAD CONFIG FILES
-# ─────────────────────────────────────────
-print_step "STEP 4/8 — Setting Up Configuration"
-
-# Clone the official AzerothCore docker repo — contains correct images
-print_info "Downloading official AzerothCore Docker setup..."
-
-if command -v git &>/dev/null; then
-    git clone --depth 1 https://github.com/azerothcore/acore-docker.git "$INSTALL_DIR" 2>/dev/null || true
-else
+if ! command -v git &>/dev/null; then
     print_warning "Git not found — installing..."
     if command -v pacman &>/dev/null; then
         sudo pacman -Sy --noconfirm git 2>/dev/null || true
     else
         sudo apt-get install -y git 2>/dev/null || true
     fi
-    git clone --depth 1 https://github.com/azerothcore/acore-docker.git "$INSTALL_DIR"
 fi
 
-# Verify the clone worked
+if ! command -v git &>/dev/null; then
+    print_error "Could not install git. Please install it manually:"
+    print_info "  sudo pacman -Sy --noconfirm git"
+    exit 1
+fi
+print_success "Git is available"
+
+# ─────────────────────────────────────────
+# STEP 4 — DOWNLOAD AZEROTHCORE
+# ─────────────────────────────────────────
+print_step "STEP 4/8 — Setting Up Configuration"
+
+print_info "Downloading official AzerothCore Docker setup..."
+
+# Remove existing folder if it exists so git clone works cleanly
+if [ -d "$INSTALL_DIR" ]; then
+    print_info "Clearing existing server folder for fresh install..."
+    rm -rf "$INSTALL_DIR"
+fi
+
+# Clone official acore-docker repo directly into INSTALL_DIR
+git clone --depth 1 \
+    https://github.com/azerothcore/acore-docker.git \
+    "$INSTALL_DIR" 2>&1
+
+# Verify the clone worked and docker-compose.yml exists
 if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
-    print_error "Failed to download AzerothCore setup. Check your internet connection."
+    print_error "Failed to download AzerothCore setup."
+    print_info "Things to try:"
+    print_info "  1. Check your internet connection"
+    print_info "  2. Try running the installer again"
+    print_info "  3. Manually run: git clone https://github.com/azerothcore/acore-docker.git ~/wow-server"
     exit 1
 fi
 
+# Create our extra helper folders inside the cloned repo
+mkdir -p "$INSTALL_DIR/logs"
+mkdir -p "$INSTALL_DIR/data"
+
 print_success "AzerothCore Docker setup downloaded!"
+print_success "docker-compose.yml is ready!"
 
 # Create a simple start/stop script for convenience
 cat > "$INSTALL_DIR/start.sh" << 'STARTSCRIPT'
@@ -305,7 +319,15 @@ print_info "Go make a coffee! ☕"
 echo ""
 
 cd "$INSTALL_DIR"
-docker compose pull
+
+if ! docker compose pull; then
+    print_error "Failed to download server images."
+    print_info "Things to try:"
+    print_info "  1. Check your internet connection"
+    print_info "  2. Make sure Docker is running: sudo systemctl start docker"
+    print_info "  3. Try running the installer again"
+    exit 1
+fi
 
 print_success "All images downloaded!"
 
@@ -337,7 +359,7 @@ echo ""
 if [ $ELAPSED -ge $TIMEOUT ]; then
     print_warning "Server is taking longer than expected to start."
     print_info "This is normal on first run. Check progress with:"
-    print_info "  docker logs -f ac_worldserver"
+    print_info "  docker logs -f acore-docker-ac-worldserver-1"
     print_info "Wait until you see 'World initialized' then continue."
 else
     print_success "World Server is LIVE! ⚔️"
@@ -371,16 +393,29 @@ while true; do
     echo "Password cannot be empty."
 done
 
+# Wait to ensure DB is fully ready before trying to create account
+print_info "Waiting for database to be ready..."
+sleep 10
+
 # Detect container name — acore-docker uses different naming
-DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "ac.database|ac_database" | head -1)
+DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -iE "ac.database|ac_database" | head -1)
 if [ -z "$DB_CONTAINER" ]; then
     DB_CONTAINER="acore-docker-ac-database-1"
 fi
-
 print_info "Using database container: $DB_CONTAINER"
 
 # Hash the password the way AzerothCore expects (SHA1 of USER:PASS uppercase)
-WOW_PASS_HASH=$(echo -n "${WOW_USERNAME^^}:${WOW_PASSWORD^^}" | sha1sum | awk '{print toupper($1)}')
+WOW_USERNAME_UPPER=$(echo "$WOW_USERNAME" | tr '[:lower:]' '[:upper:]')
+WOW_PASSWORD_UPPER=$(echo "$WOW_PASSWORD" | tr '[:lower:]' '[:upper:]')
+
+if command -v sha1sum &>/dev/null; then
+    WOW_PASS_HASH=$(echo -n "${WOW_USERNAME_UPPER}:${WOW_PASSWORD_UPPER}" | sha1sum | awk '{print toupper($1)}')
+elif command -v shasum &>/dev/null; then
+    WOW_PASS_HASH=$(echo -n "${WOW_USERNAME_UPPER}:${WOW_PASSWORD_UPPER}" | shasum -a 1 | awk '{print toupper($1)}')
+else
+    print_warning "sha1sum not found — account creation may need to be done manually."
+    WOW_PASS_HASH=""
+fi
 
 # Insert account directly into auth database
 docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -e "
@@ -438,8 +473,8 @@ GM Commands (use in-game chat):
 Start server:   cd ~/wow-server && ./start.sh
 Stop server:    cd ~/wow-server && ./stop.sh
 Check status:   cd ~/wow-server && ./status.sh
-View logs:      docker logs -f ac_worldserver
-GM console:     docker attach ac_worldserver
+View logs:      docker logs -f acore-docker-ac-worldserver-1
+GM console:     docker attach acore-docker-ac-worldserver-1
                 (exit with Ctrl+P then Ctrl+Q)
 ====================================
 CREDS
