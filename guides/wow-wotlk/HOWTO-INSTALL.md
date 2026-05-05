@@ -134,7 +134,8 @@ The installer will ask you questions. Here's what to expect:
 **It will then automatically:**
 - Check your system
 - Install Docker (the software that runs the server)
-- Download the WoW server files *(this takes 10-20 minutes — go make a coffee! ☕)*
+- Install Git (used to download the server files)
+- Download the official AzerothCore server *(this takes 10-20 minutes — go make a coffee! ☕)*
 - Start the server
 - Ask you to create a username and password
 
@@ -144,7 +145,21 @@ The installer will ask you questions. Here's what to expect:
 **"Enter your desired password:"**
 → Type a password (nothing will appear as you type — that's normal for security!)
 
-After that the installer finishes everything automatically and tells you what to do next.
+After that the installer will try to create your account automatically. You'll see either:
+
+```
+✅ Account created successfully: YourUsername
+```
+
+Or if automatic creation isn't available on your system:
+
+```
+⚠️  Create your account manually after launch:
+    docker attach acore-docker-ac-worldserver-1
+    account create YourUsername YourPassword YourPassword
+```
+
+> 💡 **If you see the manual instructions** — don't panic! Just follow the steps it shows you. Type the commands exactly as shown, pressing Enter after each one. Then type Ctrl+P followed by Ctrl+Q to exit the console.
 
 ---
 
@@ -208,6 +223,13 @@ cd ~/wow-server && ./stop.sh
 ---
 
 ## ❓ Something Went Wrong?
+
+**"Account wasn't created automatically"**
+→ The installer will show you the manual commands — follow them exactly
+→ Open the worldserver console: `docker attach acore-docker-ac-worldserver-1`
+→ Type: `account create USERNAME PASSWORD PASSWORD` (yes, password twice)
+→ Type: `account set gmlevel USERNAME 3 -1`
+→ Exit with Ctrl+P then Ctrl+Q
 
 **"Nothing happens when I run install.sh"**
 → Make sure you ran `chmod +x install.sh` first (Step 5)
