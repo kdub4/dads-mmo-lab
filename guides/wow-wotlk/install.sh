@@ -296,23 +296,22 @@ fi
 mkdir -p "$INSTALL_DIR/logs"
 mkdir -p "$INSTALL_DIR/data"
 
-# ── Disable phpMyAdmin to avoid port 8080 conflicts ──
-# phpMyAdmin is a nice-to-have web DB manager but causes port conflicts
-# on many Steam Decks. We disable it by commenting it out since WoW
-# doesn't need it to run.
-print_info "Configuring docker-compose for Steam Deck..."
+# ── Fix phpMyAdmin port conflict on Steam Deck ──
+# phpMyAdmin ships hardcoded on port 8080 which conflicts with
+# Decky Loader and other services on many Steam Decks.
+# We remap it to port 8181 using docker-compose.override.yml
+print_info "Configuring ports for Steam Deck..."
 
-if [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
-    # Create a docker-compose.override.yml that disables phpmyadmin
-    cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE'
+cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE'
 version: '3.9'
 services:
-  ac-phpmyadmin:
-    profiles:
-      - disabled
+  phpmyadmin:
+    ports:
+      - "8181:80"
 OVERRIDE
-    print_success "phpMyAdmin disabled (prevents port 8080 conflicts)"
-fi
+
+print_success "phpMyAdmin remapped to port 8181 (avoids Steam Deck conflicts)"
+print_info "If you want to use phpMyAdmin, visit: http://localhost:8181"
 
 print_success "AzerothCore Docker setup downloaded!"
 print_success "docker-compose.yml is ready!"
