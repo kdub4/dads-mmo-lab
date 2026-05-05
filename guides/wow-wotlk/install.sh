@@ -303,7 +303,6 @@ mkdir -p "$INSTALL_DIR/data"
 print_info "Configuring ports for Steam Deck..."
 
 cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE'
-version: '3.9'
 services:
   phpmyadmin:
     ports:
@@ -316,16 +315,63 @@ print_info "If you want to use phpMyAdmin, visit: http://localhost:8181"
 print_success "AzerothCore Docker setup downloaded!"
 print_success "docker-compose.yml is ready!"
 
-# Create a simple start/stop script for convenience
+# ─────────────────────────────────────────
+# INSTALL MODULES
+# ─────────────────────────────────────────
+print_step "STEP 4b/8 — Installing Dad's MMO Lab Modules"
+print_info "Installing the special sauce that makes this server shine..."
+echo ""
+
+MODULES_DIR="$INSTALL_DIR/modules"
+mkdir -p "$MODULES_DIR"
+
+# mod-playerbots — 500 AI bots that roam, quest, dungeon and party with you
+print_info "Installing mod-playerbots (AI bots)..."
+git clone --depth 1 \
+    https://github.com/liyunfan1223/mod-playerbots.git \
+    "$MODULES_DIR/mod-playerbots" 2>/dev/null && \
+    print_success "mod-playerbots installed!" || \
+    print_warning "mod-playerbots failed — you can add it manually later"
+
+# mod-individual-progression — Vanilla → TBC → WotLK natural progression
+print_info "Installing mod-individual-progression..."
+git clone --depth 1 \
+    https://github.com/ZhengPeiRu21/mod-individual-progression.git \
+    "$MODULES_DIR/mod-individual-progression" 2>/dev/null && \
+    print_success "mod-individual-progression installed!" || \
+    print_warning "mod-individual-progression failed — you can add it manually later"
+
+# mod-ah-bot-plus — Living Auction House economy on all three AHs
+print_info "Installing mod-ah-bot-plus (Auction House bot)..."
+git clone --depth 1 \
+    https://github.com/azerothcore/mod-ah-bot.git \
+    "$MODULES_DIR/mod-ah-bot" 2>/dev/null && \
+    print_success "mod-ah-bot-plus installed!" || \
+    print_warning "mod-ah-bot failed — you can add it manually later"
+
+# mod-dungeon-master — Procedural dungeon challenges with roguelike buffs
+print_info "Installing mod-dungeon-master..."
+git clone --depth 1 \
+    https://github.com/InstanceForge/mod-dungeon-master.git \
+    "$MODULES_DIR/mod-dungeon-master" 2>/dev/null && \
+    print_success "mod-dungeon-master installed!" || \
+    print_warning "mod-dungeon-master failed — you can add it manually later"
+
+echo ""
+print_success "Modules installed! These give you:"
+print_info "  🤖 500 AI bots — party, dungeon and raid companions"
+print_info "  📈 Individual progression — Vanilla → TBC → WotLK"
+print_info "  💰 Living Auction House — real economy on all 3 AHs"
+print_info "  🏰 Dungeon Master — procedural challenges and roguelike buffs"
+echo ""
 cat > "$INSTALL_DIR/start.sh" << 'STARTSCRIPT'
 #!/bin/bash
 echo "⚔️  Starting WoW Server..."
 cd "$(dirname "$0")"
-# Scale phpmyadmin to 0 — not needed for WoW and causes port conflicts
 docker compose up -d --scale phpmyadmin=0
 echo ""
 echo "✅ Server is starting! Give it 2-3 minutes on first run."
-echo "📋 Check progress: docker logs -f acore-docker-ac-worldserver-1"
+echo "📋 To check progress run: docker ps"
 echo "🎮 Then launch WoW through Steam!"
 STARTSCRIPT
 
@@ -385,7 +431,7 @@ echo ""
 TIMEOUT=300
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-    if docker logs acore-docker-ac-worldserver-1 2>&1 | grep -q "World initialized"; then
+    if docker logs "$WORLD_CONTAINER" 2>&1 | grep -q "ready\.\.\."; then
         break
     fi
     printf "."
@@ -455,6 +501,13 @@ print_step "STEP 6/8 — Starting the Server"
 print_info "First launch takes 5-10 minutes to build the database. Please wait..."
 echo ""
 
+# Clean up any orphaned containers from previous installs
+print_info "Cleaning up any previous installation remnants..."
+docker compose down --remove-orphans 2>/dev/null || true
+# Remove any stray worldserver/authserver containers by image name
+docker ps -a --format '{{.Names}}' | grep -iE "worldserver|authserver|ac-database" | \
+    xargs -r docker rm -f 2>/dev/null || true
+
 if ! docker compose up -d --scale phpmyadmin=0; then
     print_error "Failed to start the server."
     print_info "Things to try:"
@@ -470,10 +523,17 @@ print_info "First launch builds the entire database — this can take 5-15 minut
 print_info "The dots below mean it's working. Go make a coffee! ☕"
 echo ""
 
-TIMEOUT=900  # 15 minutes — first run on slow SD card or slow connection can take a while
+# Detect worldserver container name dynamically
+WORLD_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i "worldserver" | head -1)
+if [ -z "$WORLD_CONTAINER" ]; then
+    WORLD_CONTAINER="wow-server-ac-worldserver-1"
+fi
+print_info "Detected worldserver container: $WORLD_CONTAINER"
+
+TIMEOUT=900
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-    if docker logs acore-docker-ac-worldserver-1 2>&1 | grep -q "World initialized"; then
+    if docker logs "$WORLD_CONTAINER" 2>&1 | grep -q "ready\.\.\."; then
         break
     fi
     printf "."
@@ -485,8 +545,8 @@ echo ""
 if [ $ELAPSED -ge $TIMEOUT ]; then
     print_warning "Server is taking longer than expected to start."
     print_info "This is normal on first run. Check progress with:"
-    print_info "  docker logs -f acore-docker-ac-worldserver-1"
-    print_info "Wait until you see 'World initialized' then continue."
+    print_info "  docker logs -f $WORLD_CONTAINER"
+    print_info "Wait until you see 'ready...' then continue."
 else
     print_success "World Server is LIVE! ⚔️"
 fi
@@ -526,7 +586,7 @@ sleep 10
 # Detect container name — acore-docker uses different naming
 DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -iE "ac.database|ac_database" | head -1)
 if [ -z "$DB_CONTAINER" ]; then
-    DB_CONTAINER="acore-docker-ac-database-1"
+    DB_CONTAINER="wow-server-ac-database-1"
 fi
 print_info "Using database container: $DB_CONTAINER"
 
@@ -546,7 +606,7 @@ fi
 if [ -z "$WOW_PASS_HASH" ]; then
     print_warning "Could not hash password — skipping automatic account creation."
     print_info "Create your account manually after the server starts:"
-    print_info "  docker attach acore-docker-ac-worldserver-1"
+    print_info "  docker attach $WORLD_CONTAINER"
     print_info "  account create ${WOW_USERNAME} ${WOW_PASSWORD} ${WOW_PASSWORD}"
     print_info "  account set gmlevel ${WOW_USERNAME} 3 -1"
 else
@@ -578,8 +638,10 @@ if [ -n "$ACCOUNT_ID" ]; then
 else
     print_warning "Account may not have been created automatically."
     print_info "You can create it manually after launch:"
-    print_info "  docker attach acore-docker-ac-worldserver-1"
+    print_info "  docker attach $WORLD_CONTAINER"
     print_info "  account create ${WOW_USERNAME} ${WOW_PASSWORD} ${WOW_PASSWORD}"
+    print_info "  account set gmlevel ${WOW_USERNAME} 3 -1"
+    print_info "  (then press Ctrl+P followed by Ctrl+Q to exit)"
 fi
 fi
 
@@ -606,9 +668,9 @@ GM Commands (use in-game chat):
 ====================================
 Start server:   cd ~/wow-server && ./start.sh
 Stop server:    cd ~/wow-server && ./stop.sh
-Check status:   cd ~/wow-server && ./status.sh
-View logs:      docker logs -f acore-docker-ac-worldserver-1
-GM console:     docker attach acore-docker-ac-worldserver-1
+Check status:   docker ps
+View logs:      docker logs -f $WORLD_CONTAINER
+GM console:     docker attach $WORLD_CONTAINER
                 (exit with Ctrl+P then Ctrl+Q)
 ====================================
 CREDS
@@ -646,7 +708,7 @@ echo -e "  📁 Server folder:  ${CYAN}$INSTALL_DIR${NC}"
 echo -e "  📋 Your account:   ${CYAN}$INSTALL_DIR/MY_ACCOUNT.txt${NC}"
 echo -e "  ▶️  Start server:   ${CYAN}$INSTALL_DIR/start.sh${NC}"
 echo -e "  ⏹️  Stop server:    ${CYAN}$INSTALL_DIR/stop.sh${NC}"
-echo -e "  🖥️  GM Console:     ${CYAN}docker attach acore-docker-ac-worldserver-1${NC}"
+echo -e "  🖥️  GM Console:     ${CYAN}docker attach $WORLD_CONTAINER${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}  📺 Full video guide: ${CYAN}youtube.com/@DadsMmoLab${NC}"
