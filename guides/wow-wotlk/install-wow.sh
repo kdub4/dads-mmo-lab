@@ -1012,6 +1012,20 @@ show_completion() {
     echo ""
     echo -e "${GREEN}${BOLD}Welcome to Azeroth. It's yours now. Forever. ⚔️${NC}"
     echo ""
+    echo -e "${YELLOW}  ℹ️  Your server is still running right now!${NC}"
+    echo -e "${YELLOW}  To stop it: ${CYAN}cd $SERVER_DIR && docker compose down${NC}"
+    echo -e "${YELLOW}  Or just launch from Gaming Mode next time — it handles everything.${NC}"
+    echo ""
+    echo -e "${WHITE}Would you like to stop the server now? (y/n): ${NC}"
+    read -r STOP_NOW
+    if [[ "$STOP_NOW" =~ ^[Yy]$ ]]; then
+        print_info "Stopping server..."
+        cd "$SERVER_DIR" && docker compose down 2>/dev/null
+        print_success "Server stopped! Use Gaming Mode launcher to start it next time."
+    else
+        print_info "Server left running — enjoy Azeroth! ⚔️"
+    fi
+    echo ""
 }
 
 # ─────────────────────────────────────────
