@@ -1,62 +1,24 @@
-# 🖥️ Desktop Mode Controls — Complete Guide
+# 🖥️ Desktop Mode Controls — Part 1
+## Server Management & Account Creation
 
-> **"Give a man a fish and he eats for a day.**
-> **Teach a man to fish and he eats forever."**
->
-> This guide teaches you how to actually control your WoW server
-> from Desktop Mode. Not just the commands — but WHY they work.
-> By the end you'll feel comfortable in the terminal and maybe
-> even start to enjoy it. 😄
-
----
-
-## 📖 Quick Reference — The Commands You'll Use Most
-
-Keep this section bookmarked. These are your everyday commands.
-
-### Starting the Server
-```bash
-cd ~/wow-server && docker compose up -d
-```
-
-### Stopping the Server (safely!)
-```bash
-cd ~/wow-server && docker compose down
-```
-
-### Checking Server Status
-```bash
-docker ps
-```
-
-### Watching the Server Start Up
-```bash
-docker logs -f acore-docker-ac-worldserver-1
-```
-*(Press Ctrl+C to stop watching — server keeps running)*
-
-### Opening the GM Console
-```bash
-docker attach acore-docker-ac-worldserver-1
-```
-*(Exit with Ctrl+P then Ctrl+Q — do NOT press Ctrl+C!)*
+> **➡️ [Part 2 — GM Console, Bot Commands, Troubleshooting & Linux Basics](./HOWTO-DESKTOP-CONTROLS-2.md)**
 
 ---
 
 ## 🧠 Understanding What's Actually Happening
 
-Before we dive in — let's understand what your WoW server
-actually is. This will make everything click.
+Before diving in — here's what your WoW server actually is.
+This will make everything click.
 
 ### What is Docker?
 
-Think of Docker like a lunchbox. Inside the lunchbox are
-everything your WoW server needs — the database, the game
-server, all the settings. Docker keeps it all contained and
-neat so it doesn't interfere with the rest of your Steam Deck.
+Think of Docker like a lunchbox. Inside are everything your
+WoW server needs — the database, the game server, all the
+settings. Docker keeps it all contained and neat so it does
+not interfere with the rest of your Steam Deck.
 
-When you run `docker compose up` you're opening the lunchbox.
-When you run `docker compose down` you're closing it safely.
+When you run `docker compose up` you are opening the lunchbox.
+When you run `docker compose down` you are closing it safely.
 
 ### What are Containers?
 
@@ -64,36 +26,68 @@ Your WoW server is actually THREE separate programs running
 at the same time:
 
 | Container | What it does |
-|---|---|
-| `ac-database` | Stores everything — characters, items, quests |
-| `ac-authserver` | Handles logging in — checks your username and password |
-| `ac-worldserver` | The actual game world — NPCs, quests, combat |
+|-----------|-------------|
+| Database | Stores everything — characters, items, quests |
+| Authserver | Handles login — checks username and password |
+| Worldserver | The actual game world — NPCs, quests, combat |
 
-They work together. If the database isn't running, nothing works.
-That's why we always use `docker compose` — it starts them all
-in the right order automatically.
+They work together. If the database is not running nothing
+else works. That is why we always use `docker compose` — it
+starts all three in the right order automatically.
 
-### What is Konsole?
+### Which Container is Which?
 
-Konsole is the terminal — your direct line to Linux. It's like
-texting the operating system. You type a command, Linux does it.
+Different server versions use different container names:
 
-Don't be intimidated by it. Every command in this guide is
-safe to run. The worst that can happen is an error message.
+| Server | Worldserver Container |
+|--------|----------------------|
+| Base WoW | `acore-docker-ac-worldserver-1` |
+| NPCBots | `ac-worldserver` |
+| Playerbots | `ac-worldserver` |
+
+The universal way to always find the right one:
+
+```bash
+docker ps --format '{{.Names}}' | grep worldserver
+```
+
+Whatever it returns — that is your container.
 
 ---
 
-## 🚀 Opening Konsole
+## 📋 Quick Reference — Commands You Will Use Most
 
-From Gaming Mode:
-1. Press **STEAM button**
-2. Select **Power**
-3. Select **Switch to Desktop**
-4. Right-click the desktop → **Open Terminal** or search for **Konsole**
+### Start the Server
+```bash
+cd ~/wow-server && docker compose up -d
+```
 
-From Desktop Mode:
-1. Right-click the desktop background
-2. Select **Open Terminal**
+Change `wow-server` to `wow-server-npcbots` or
+`wow-server-playerbots` for other versions.
+
+### Stop the Server Safely
+```bash
+cd ~/wow-server && docker compose down
+```
+
+### Check if Server is Running
+```bash
+docker ps
+```
+
+### Watch the Server Start Up
+```bash
+docker logs -f $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
+```
+
+Press Ctrl+C to stop watching. The server keeps running.
+
+### Open the GM Console
+```bash
+docker attach $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
+```
+
+Exit with **Ctrl+P then Ctrl+Q** — never Ctrl+C!
 
 ---
 
@@ -105,13 +99,14 @@ From Desktop Mode:
 cd ~/wow-server && docker compose up -d
 ```
 
-**What this means:**
-- `cd ~/wow-server` — navigate into your server folder
-- `docker compose up` — start all the containers
-- `-d` — run in the background (d = detached)
+The `-d` means run in the background. You can close Konsole
+and the server keeps running!
 
-After running this, your server starts in the background.
-You can close Konsole and it keeps running!
+For other server versions:
+```bash
+cd ~/wow-server-npcbots && docker compose up -d
+cd ~/wow-server-playerbots && docker compose up -d
+```
 
 ---
 
@@ -121,55 +116,48 @@ You can close Konsole and it keeps running!
 cd ~/wow-server && docker compose down
 ```
 
-**Always use this to stop the server** — never just turn off
-your Steam Deck while the server is running. Docker needs to
-save the database properly first.
-
-If you forget and it shuts down uncleanly don't panic — the
-database is usually fine. But this is the safe way.
+Always use this to stop — never just turn off your Steam Deck
+while the server is running. Docker needs to save the database
+properly first.
 
 ---
 
-### Checking If Your Server Is Running
+### Checking Server Status
 
 ```bash
 docker ps
 ```
 
-You'll see a table of running containers. If you see
-`ac-worldserver`, `ac-authserver` and `ac-database` — your
-server is running. If the table is empty — it's stopped.
+If you see your worldserver, authserver and database containers
+listed — your server is running. If the table is empty — it
+is stopped.
 
 ---
 
-### Restarting Just the World Server
+### Restarting Just the Worldserver
 
 Sometimes you change a setting and just need to restart the
 game world without touching the database:
 
 ```bash
-docker restart acore-docker-ac-worldserver-1
+docker restart $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
 ```
-
-This is faster than a full stop and start.
 
 ---
 
-### Checking Server Logs (What's Happening?)
+### Checking Server Logs
 
 ```bash
-docker logs acore-docker-ac-worldserver-1
+docker logs $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
 ```
 
-This shows everything the server has printed since it started.
-To watch it live as it happens:
+To watch live as it happens add `-f`:
 
 ```bash
-docker logs -f acore-docker-ac-worldserver-1
+docker logs -f $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
 ```
 
-The `-f` means follow — it keeps updating in real time.
-Press **Ctrl+C** to stop following. The server keeps running.
+Press Ctrl+C to stop following. The server keeps running.
 
 ---
 
@@ -177,48 +165,48 @@ Press **Ctrl+C** to stop following. The server keeps running.
 
 ### Creating a New Account
 
-1. Open the GM console:
+Open the GM console:
+
 ```bash
-docker attach acore-docker-ac-worldserver-1
+docker attach $(docker ps --format '{{.Names}}' | grep worldserver | head -1)
 ```
 
-2. Type the account create command:
+Then type:
+
 ```
 account create USERNAME PASSWORD PASSWORD
-```
-
-3. Set GM level (3 = full admin):
-```
 account set gmlevel USERNAME 3 -1
 ```
 
-4. Exit the console safely:
-**Ctrl+P** then **Ctrl+Q**
+Exit safely with **Ctrl+P then Ctrl+Q**
 
-> 💡 **Why type the password twice?** It's a confirmation
-> step — like when websites ask you to confirm your password.
-> Both must match or it won't create the account.
+> Type the password twice — it is a confirmation step.
+> Both must match or it will not create the account.
 
 ---
 
 ### Creating Multiple Accounts
 
-Want separate accounts for different characters or for
-friends on LAN? Just repeat the process:
+Just repeat the process for each account:
 
 ```
 account create caitlin mypassword mypassword
 account set gmlevel caitlin 3 -1
 
-account create kiddo1 simplepass simplepass
-account set gmlevel kiddo1 1 -1
+account create kiddo simplepass simplepass
+account set gmlevel kiddo 3 -1
 ```
 
-> 💡 **GM Levels explained:**
-> - Level **0** = Regular player (no commands)
-> - Level **1** = Moderator (basic commands)
-> - Level **2** = Game Master (most commands)
-> - Level **3** = Administrator (full control)
+---
+
+### GM Level Explained
+
+| Level | Role | Can do |
+|-------|------|--------|
+| 0 | Regular player | Nothing special |
+| 1 | Moderator | Basic commands |
+| 2 | Game Master | Most commands |
+| 3 | Administrator | Full control |
 
 ---
 
@@ -238,12 +226,54 @@ account list
 
 ---
 
+## 🔀 Running Multiple Server Versions
+
+If you have Base WoW AND NPCBots AND Playerbots installed
+you can only run one at a time — they share the same ports.
+
+**Switch from Base WoW to NPCBots:**
+
+```bash
+cd ~/wow-server && docker compose down
+cd ~/wow-server-npcbots && docker compose up -d
+```
+
+**Switch from NPCBots to Playerbots:**
+
+```bash
+cd ~/wow-server-npcbots && docker compose down
+cd ~/wow-server-playerbots && docker compose up -d
+```
+
 ---
 
-## 📖 Continue Reading
+## 💾 Backing Up Your Characters
 
-**➡️ [Part 2 — GM Console, Bot Commands, Troubleshooting & Linux Basics](./HOWTO-DESKTOP-CONTROLS-2.md)**
+Before doing anything major — back up first:
+
+```bash
+DB=$(docker ps --format '{{.Names}}' | grep -iE "database" | head -1)
+docker exec $DB mysqldump -uroot -ppassword --databases acore_characters acore_auth acore_world > ~/wow-backup-$(date +%Y%m%d).sql
+```
+
+This saves everything to a file named with today's date.
+
+**To restore a backup:**
+
+```bash
+DB=$(docker ps --format '{{.Names}}' | grep -iE "database" | head -1)
+docker exec -i $DB mysql -uroot -ppassword < ~/wow-backup-20260506.sql
+```
 
 ---
 
-*Part of the [Dad's MMO Lab](https://github.com/DadsMmoLab/dads-mmo-lab) project — offline MMO servers on Steam Deck, free forever.*
+## ➡️ Continue to Part 2
+
+**[Part 2 — GM Console, Bot Commands, Troubleshooting & Linux Basics](./HOWTO-DESKTOP-CONTROLS-2.md)**
+
+---
+
+*Part of the Dad's MMO Lab project — offline MMO servers on Steam Deck, free forever.*
+
+**youtube.com/@DadsMmoLab**
+**github.com/DadsMmoLab/dads-mmo-lab**
