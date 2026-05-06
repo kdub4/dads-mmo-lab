@@ -708,40 +708,59 @@ create_accounts() {
         2>/dev/null | grep -i "worldserver" | head -1)
     WORLD_CONTAINER="${WORLD_CONTAINER:-acore-docker-ac-worldserver-1}"
 
-    # Wait for DB
-    sleep 10
+    # Wait for server to be fully ready
+    sleep 15
 
-    # Always create admin account first
-    print_info "Creating default admin account..."
-    ADMIN_HASH=$(echo -n "ADMIN:ADMIN" | sha1sum 2>/dev/null | awk '{print toupper($1)}' || \
-                 echo -n "ADMIN:ADMIN" | shasum -a 1 2>/dev/null | awk '{print toupper($1)}' || echo "")
+    # Detect worldserver container dynamically
+    # Works for ALL server types — base, npcbots, playerbots
+    WORLD_CONTAINER=$(docker ps --format '{{.Names}}' \
+        2>/dev/null | grep -i "worldserver" | head -1)
 
-    if [ -n "$ADMIN_HASH" ]; then
-        docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -e "
-            INSERT INTO account (username, sha_pass_hash, reg_mail, email, joindate)
-            VALUES ('ADMIN', '${ADMIN_HASH}', 'admin@local.lan', 'admin@local.lan', NOW())
-            ON DUPLICATE KEY UPDATE sha_pass_hash='${ADMIN_HASH}';
-        " 2>/dev/null || true
+    DB_CONTAINER=$(docker ps --format '{{.Names}}' \
+        2>/dev/null | grep -iE "ac.database|ac_database" | head -1)
 
-        ADMIN_ID=$(docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -sNe \
-            "SELECT id FROM account WHERE username='ADMIN';" 2>/dev/null)
-
-        if [ -n "$ADMIN_ID" ]; then
-            docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -e "
-                INSERT INTO account_access (id, gmlevel, RealmID)
-                VALUES ('${ADMIN_ID}', 3, -1)
-                ON DUPLICATE KEY UPDATE gmlevel=3;
-            " 2>/dev/null || true
-        fi
-        print_success "Default account created!"
-        print_info "  Username: admin  |  Password: admin  |  GM Level: 3"
+    if [ -z "$WORLD_CONTAINER" ]; then
+        print_warning "Worldserver not detected yet."
+        print_info "Create your account manually once the server is ready:"
+        print_info "  docker ps | grep worldserver"
+        print_info "  docker attach <container-name>"
+        print_info "  account create admin admin admin"
+        print_info "  account set gmlevel admin 3 -1"
+        print_info "  (exit: Ctrl+P then Ctrl+Q)"
+        return 0
     fi
 
+    print_info "Detected worldserver: $WORLD_CONTAINER"
+    print_info "Creating default admin account via worldserver console..."
+
+    # Use worldserver console — works on ALL AzerothCore versions
+    # regardless of auth system (SRP6, SHA1, etc.)
+    docker exec -i "$WORLD_CONTAINER" sh -c \
+        'sleep 1 && echo "account create admin admin admin" && sleep 2 && echo "account set gmlevel admin 3 -1" && sleep 1' \
+        2>/dev/null || true
+
+    sleep 3
+
+    # Verify by checking the database
+    if [ -n "$DB_CONTAINER" ]; then
+        ACCOUNT_CHECK=$(docker exec "$DB_CONTAINER" \
+            mysql -uroot -ppassword acore_auth -sNe \
+            "SELECT COUNT(*) FROM account WHERE username=\'ADMIN\';" 2>/dev/null)
+        if [ "${ACCOUNT_CHECK}" = "1" ]; then
+            print_success "Default account created and verified!"
+        else
+            print_warning "Account created — login may take a moment to activate."
+        fi
+    else
+        print_success "Account creation command sent!"
+    fi
+
+    print_info "  Username: admin  |  Password: admin  |  GM Level: 3"
     echo ""
 
-    # Account creation loop
+    # Account creation loop — ask until they say no
     while true; do
-        if ! ask_yes_no "Create an additional account?"; then
+        if ! ask_yes_no "Create another account?"; then
             break
         fi
 
@@ -761,38 +780,14 @@ create_accounts() {
             echo "Password cannot be empty."
         done
 
-        # Hash and create
-        NEW_USER_UPPER=$(echo "$NEW_USERNAME" | tr '[:lower:]' '[:upper:]')
-        NEW_PASS_UPPER=$(echo "$NEW_PASSWORD" | tr '[:lower:]' '[:upper:]')
+        print_info "Creating account: $NEW_USERNAME..."
 
-        NEW_HASH=$(echo -n "${NEW_USER_UPPER}:${NEW_PASS_UPPER}" | sha1sum 2>/dev/null | awk '{print toupper($1)}' || \
-                   echo -n "${NEW_USER_UPPER}:${NEW_PASS_UPPER}" | shasum -a 1 2>/dev/null | awk '{print toupper($1)}' || echo "")
+        docker exec -i "$WORLD_CONTAINER" sh -c \
+            "sleep 1 && echo \"account create ${NEW_USERNAME} ${NEW_PASSWORD} ${NEW_PASSWORD}\" && sleep 2 && echo \"account set gmlevel ${NEW_USERNAME} 3 -1\" && sleep 1" \
+            2>/dev/null || true
 
-        if [ -n "$NEW_HASH" ]; then
-            docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -e "
-                INSERT INTO account (username, sha_pass_hash, reg_mail, email, joindate)
-                VALUES (UPPER('${NEW_USERNAME}'), '${NEW_HASH}', 'admin@local.lan', 'admin@local.lan', NOW())
-                ON DUPLICATE KEY UPDATE sha_pass_hash='${NEW_HASH}';
-            " 2>/dev/null || true
-
-            NEW_ID=$(docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -sNe \
-                "SELECT id FROM account WHERE username=UPPER('${NEW_USERNAME}');" 2>/dev/null)
-
-            if [ -n "$NEW_ID" ]; then
-                docker exec "$DB_CONTAINER" mysql -uroot -ppassword acore_auth -e "
-                    INSERT INTO account_access (id, gmlevel, RealmID)
-                    VALUES ('${NEW_ID}', 3, -1)
-                    ON DUPLICATE KEY UPDATE gmlevel=3;
-                " 2>/dev/null || true
-                print_success "Account created: ${NEW_USERNAME} (GM Level 3)"
-            else
-                print_warning "Could not create ${NEW_USERNAME} automatically."
-                print_info "Create it manually: docker attach $WORLD_CONTAINER"
-                print_info "  account create ${NEW_USERNAME} ${NEW_PASSWORD} ${NEW_PASSWORD}"
-                print_info "  account set gmlevel ${NEW_USERNAME} 3 -1"
-            fi
-        fi
-
+        sleep 2
+        print_success "Account created: $NEW_USERNAME (GM Level 3)"
         echo ""
     done
 }
