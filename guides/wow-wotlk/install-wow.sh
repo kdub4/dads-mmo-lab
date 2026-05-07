@@ -503,8 +503,39 @@ EOF
                     https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots.git \
                     "$SERVER_DIR"
 
+                # Create override with unique image tags
+                # Prevents NPCBots images overwriting Base WoW or Playerbots
+                cat > "$SERVER_DIR/docker-compose.override.yml" << 'OVERRIDE'
+services:
+  ac-worldserver:
+    image: dadsmmolab/npcbots-worldserver:latest
+    build:
+      context: .
+      target: worldserver
+      dockerfile: apps/docker/Dockerfile
+  ac-authserver:
+    image: dadsmmolab/npcbots-authserver:latest
+    build:
+      context: .
+      target: authserver
+      dockerfile: apps/docker/Dockerfile
+  ac-db-import:
+    image: dadsmmolab/npcbots-db-import:latest
+    build:
+      context: .
+      target: db-import
+      dockerfile: apps/docker/Dockerfile
+  ac-client-data-init:
+    image: dadsmmolab/npcbots-client-data:latest
+    build:
+      context: .
+      target: client-data
+      dockerfile: apps/docker/Dockerfile
+OVERRIDE
+
                 print_info "Compiling NPCBots server (2-4 hours)..."
                 print_info "Progress saved to: ~/npcbots-build.log"
+                print_info "Go make a coffee — this will take a while! ☕"
                 cd "$SERVER_DIR"
                 docker compose up -d --build 2>&1 | tee ~/npcbots-build.log
 
@@ -521,12 +552,14 @@ EOF
         # ── PLAYERBOTS ────────────────────────────
         playerbots)
             print_info "Cloning Playerbots source..."
+            print_info "Using official mod-playerbots fork"
             print_warning "This will take 2-4 hours to compile!"
             print_info "Keep your Steam Deck plugged in!"
 
-            git clone --depth 1 \
-                https://github.com/liyunfan1223/azerothcore-wotlk.git \
-                --branch Playerbot \
+            # Use the official maintained fork — NOT liyunfan1223
+            git clone \
+                https://github.com/mod-playerbots/azerothcore-wotlk.git \
+                --branch=Playerbot \
                 "$SERVER_DIR"
 
             if [ ! -d "$SERVER_DIR" ]; then
@@ -534,24 +567,35 @@ EOF
                 exit 1
             fi
 
-            # Clone mod-playerbots into modules
-            mkdir -p "$SERVER_DIR/modules"
+            # Clone the official mod-playerbots module
+            print_info "Cloning mod-playerbots module..."
             git clone --depth 1 \
-                https://github.com/liyunfan1223/mod-playerbots.git \
+                https://github.com/mod-playerbots/mod-playerbots.git \
+                --branch=master \
                 "$SERVER_DIR/modules/mod-playerbots"
+
+            # Create override that MOUNTS modules at compile time
+            # This is the key — modules must be mounted during build
+            # NOT dropped in after — C++ modules compile into the binary
+            cat > "$SERVER_DIR/docker-compose.override.yml" << 'OVERRIDE'
+services:
+  ac-worldserver:
+    image: dadsmmolab/playerbots-worldserver:latest
+    volumes:
+      - ./modules:/azerothcore/modules
+  ac-authserver:
+    image: dadsmmolab/playerbots-authserver:latest
+  ac-db-import:
+    image: dadsmmolab/playerbots-db-import:latest
+  ac-client-data-init:
+    image: dadsmmolab/playerbots-client-data:latest
+OVERRIDE
 
             print_info "Compiling Playerbots server (2-4 hours)..."
             print_info "Progress saved to: ~/playerbots-build.log"
+            print_info "Go make a coffee — this will take a while! ☕"
 
             cd "$SERVER_DIR"
-
-            # Create docker-compose for playerbots if needed
-            if [ ! -f "docker-compose.yml" ]; then
-                print_error "No docker-compose.yml found in Playerbots repo."
-                print_info "Check the repo structure manually."
-                exit 1
-            fi
-
             docker compose up -d --build 2>&1 | tee ~/playerbots-build.log
 
             if [ ${PIPESTATUS[0]} -ne 0 ]; then
