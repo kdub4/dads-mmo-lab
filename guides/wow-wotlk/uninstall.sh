@@ -201,8 +201,22 @@ echo -e "  • Any other projects"
 echo ""
 
 # ─────────────────────────────────────────
-# BACKUP OFFER
+# KEEP CLIENT DATA OPTION
 # ─────────────────────────────────────────
+echo -e "${WHITE}${BOLD}Keep client data? (Recommended — saves 30+ minutes on reinstall)${NC}"
+echo -e "${BLUE}ℹ️  Client data is the map/DBC files downloaded during install.${NC}"
+echo -e "${BLUE}ℹ️  It never changes between reinstalls so there's no reason to wipe it.${NC}"
+echo ""
+
+KEEP_CLIENT_DATA=true
+if ask_yes_no "Keep client data volumes to speed up future reinstalls?"; then
+    KEEP_CLIENT_DATA=true
+    print_success "Client data will be preserved — reinstall will be much faster!"
+else
+    KEEP_CLIENT_DATA=false
+    print_info "Client data will be removed — reinstall will re-download everything."
+fi
+echo ""
 print_warning "Do you want to back up your character data first?"
 echo -e "${BLUE}ℹ️  This saves your characters, items, and progress to a backup file.${NC}"
 echo ""
@@ -346,14 +360,23 @@ print_step "STEP 3/4 — Removing Database Volumes"
 VOLUMES=(
     "dads_mmo_wow_db"
     "wow-server_ac-database"
-    "wow-server_ac-client-data"
     "wow-server-npcbots_ac-database"
-    "wow-server-npcbots_ac-client-data"
     "wow-server-playerbots_ac-database"
-    "wow-server-playerbots_ac-client-data"
     "ac-database"
-    "ac-client-data"
 )
+
+# Only remove client data volumes if user chose to wipe them
+if [ "$KEEP_CLIENT_DATA" = false ]; then
+    VOLUMES+=(
+        "wow-server_ac-client-data"
+        "wow-server-npcbots_ac-client-data"
+        "wow-server-playerbots_ac-client-data"
+        "ac-client-data"
+    )
+    print_info "Removing client data volumes..."
+else
+    print_info "Preserving client data volumes — reinstall will be fast!"
+fi
 
 for vol in "${VOLUMES[@]}"; do
     if docker volume ls 2>/dev/null | grep -q "$vol"; then
@@ -362,10 +385,14 @@ for vol in "${VOLUMES[@]}"; do
     fi
 done
 
-# Remove any orphaned anonymous volumes
-print_info "Cleaning up any orphaned volumes..."
-docker volume prune -f 2>/dev/null || true
-print_success "Orphaned volumes cleaned up"
+# Remove orphaned volumes — skip if keeping client data
+if [ "$KEEP_CLIENT_DATA" = false ]; then
+    print_info "Cleaning up orphaned volumes..."
+    docker volume prune -f 2>/dev/null || true
+    print_success "Orphaned volumes cleaned up"
+else
+    print_info "Skipping volume prune to preserve client data"
+fi
 
 docker network rm dads_mmo_network wow-server_ac-network \
     wow-server_default wow-server-npcbots_ac-network \
