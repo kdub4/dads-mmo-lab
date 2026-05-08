@@ -160,17 +160,29 @@ install_docker() {
     sudo systemctl start docker 2>/dev/null || true
     sleep 3
 
+    # Add passwordless sudo for docker so it works immediately
+    # without requiring logout — fixes "permission denied" on docker socket
+    print_info "Setting up Docker permissions..."
+    echo "deck ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose" | \
+        sudo tee /etc/sudoers.d/docker-nopasswd > /dev/null 2>&1 || true
+    sudo chmod 0440 /etc/sudoers.d/docker-nopasswd 2>/dev/null || true
+
+    # Also fix docker socket permissions directly
+    sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+
+    # If docker still not accessible without sudo — wrap it
     if ! docker ps &>/dev/null 2>&1; then
         if sudo docker ps &>/dev/null 2>&1; then
             function docker() { sudo docker "$@"; }
             export -f docker 2>/dev/null || true
+            print_info "Using sudo for Docker — will work normally after next login"
         else
             print_error "Docker failed to start. Try rebooting and running again."
             exit 1
         fi
     fi
 
-    print_success "Docker installed!"
+    print_success "Docker installed and permissions configured!"
 }
 
 install_git() {
