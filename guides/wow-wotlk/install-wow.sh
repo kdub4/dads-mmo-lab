@@ -5,7 +5,7 @@
 #
 #  https://github.com/DadsMmoLab/dads-mmo-lab
 #
-#  Version: 1.0.0
+#  Version: 1.1.0
 #
 #  Usage:
 #    chmod +x install-wow.sh
@@ -18,9 +18,19 @@
 #    4. Installs everything automatically
 #    5. Creates as many accounts as you want
 #    6. Sets up the Gaming Mode launcher
+#
+#  Changelog:
+#    1.1.0 — Error handling overhaul
+#      - Keyring reset now checks health first and requires confirmation
+#      - install_docker() surfaces real errors instead of silencing them
+#      - install_git() no longer reports success on failure
+#      - Module git clones show errors on failure
+#      - SQL apply loops track and report failures
+#      - systemctl start docker exits cleanly on failure
+#      - Heredoc launcher synced with standalone launcher scripts
 # ============================================================
 
-WIZARD_VERSION="1.0.0"
+WIZARD_VERSION="1.1.0"
 
 set -o pipefail
 
@@ -126,6 +136,78 @@ check_system() {
 }
 
 # ─────────────────────────────────────────
+# KEYRING HEALTH CHECK
+# ─────────────────────────────────────────
+check_pacman_keyring() {
+    print_info "Checking pacman keyring health..."
+
+    local keyring_broken=false
+
+    # Test 1: Keyring directory and pubring exist?
+    if [[ ! -d /etc/pacman.d/gnupg ]] || [[ ! -f /etc/pacman.d/gnupg/pubring.gpg ]]; then
+        print_warning "Keyring directory missing or incomplete."
+        keyring_broken=true
+    fi
+
+    # Test 2: Can pacman-key list keys without errors?
+    if ! sudo pacman-key --list-keys &>/dev/null; then
+        print_warning "pacman-key cannot list keys — keyring may be corrupted."
+        keyring_broken=true
+    fi
+
+    # Test 3: Can pacman sync at all?
+    if ! sudo pacman -Sy &>/dev/null; then
+        print_warning "pacman sync failed — possible keyring or signature issue."
+        keyring_broken=true
+    fi
+
+    if [[ "$keyring_broken" == false ]]; then
+        print_success "Keyring healthy — no reset needed."
+        return 0
+    fi
+
+    # ── Keyring is broken — warn user before doing anything ──
+    echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║${WHITE}${BOLD}          ⚠️  KEYRING RESET REQUIRED              ${NC}${RED}║${NC}"
+    echo -e "${RED}╠══════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║${NC}  Your pacman keyring appears broken or corrupt.  ${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                  ${RED}║${NC}"
+    echo -e "${RED}║${NC}  To fix it, the installer needs to:              ${RED}║${NC}"
+    echo -e "${RED}║${YELLOW}    • Delete /etc/pacman.d/gnupg               ${NC}${RED}║${NC}"
+    echo -e "${RED}║${YELLOW}    • Reinitialize the keyring                 ${NC}${RED}║${NC}"
+    echo -e "${RED}║${YELLOW}    • Repopulate Arch + Holo (SteamOS) keys   ${NC}${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                  ${RED}║${NC}"
+    echo -e "${RED}║${WHITE}  ⚠️  Any custom keys you added manually will   ${NC}${RED}║${NC}"
+    echo -e "${RED}║${WHITE}  be removed. Re-add them after installation    ${NC}${RED}║${NC}"
+    echo -e "${RED}║${WHITE}  if your system needs them.                    ${NC}${RED}║${NC}"
+    echo -e "${RED}║${NC}                                                  ${RED}║${NC}"
+    echo -e "${RED}║${GREEN}  This is safe for most standard Steam Decks.  ${NC}${RED}║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    echo -e "${WHITE}Type ${GREEN}yes${WHITE} to reset the keyring, or anything else to cancel: ${NC}"
+    read -r confirm
+    echo ""
+
+    if [[ "$confirm" != "yes" ]]; then
+        print_error "Keyring reset cancelled."
+        print_info "Fix your keyring manually and re-run the installer."
+        print_info "Guide: https://wiki.archlinux.org/title/Pacman/Package_signing"
+        echo ""
+        exit 1
+    fi
+
+    print_info "Resetting keyring..."
+    sudo rm -rf /etc/pacman.d/gnupg
+    sudo pacman-key --init
+    sudo pacman-key --populate archlinux
+    sudo pacman-key --populate holo
+    print_success "Keyring reset complete."
+    echo ""
+}
+
+# ─────────────────────────────────────────
 # INSTALL DOCKER
 # ─────────────────────────────────────────
 install_docker() {
@@ -140,24 +222,40 @@ install_docker() {
         sudo steamos-readonly disable
     fi
 
-    # Fix pacman keyring
-    sudo rm -rf /etc/pacman.d/gnupg 2>/dev/null || true
-    sudo pacman-key --init 2>/dev/null || true
-    sudo pacman-key --populate archlinux 2>/dev/null || true
-    sudo pacman-key --populate holo 2>/dev/null || true
+    # Check keyring health — prompt before any reset
+    check_pacman_keyring
 
+    # Enable dev mode if available
     if command -v steamos-devmode &>/dev/null; then
-        sudo steamos-devmode enable 2>/dev/null || true
+        sudo steamos-devmode enable 2>/dev/null || \
+            print_warning "steamos-devmode failed — continuing anyway"
     fi
 
-    sudo pacman -Sy --noconfirm archlinux-keyring 2>/dev/null || true
-    sudo pacman -Sy --noconfirm docker docker-compose
+    # Update keyring package before installing anything else
+    print_info "Updating archlinux-keyring..."
+    if ! sudo pacman -Sy --noconfirm archlinux-keyring; then
+        print_warning "archlinux-keyring update failed — Docker install may fail."
+    fi
+
+    # Install Docker — this must succeed
+    if ! sudo pacman -Sy --noconfirm docker docker-compose; then
+        print_error "Failed to install Docker. Check your internet connection and keyring."
+        exit 1
+    fi
 
     sudo usermod -aG docker "$USER"
     sleep 2
-    sudo systemctl daemon-reload 2>/dev/null || true
-    sudo systemctl enable docker 2>/dev/null || true
-    sudo systemctl start docker 2>/dev/null || true
+
+    sudo systemctl daemon-reload 2>/dev/null || \
+        print_warning "systemctl daemon-reload failed — may need reboot"
+    sudo systemctl enable docker 2>/dev/null || \
+        print_warning "Could not enable Docker on boot — start manually if needed"
+
+    if ! sudo systemctl start docker 2>/dev/null; then
+        print_error "Docker failed to start. Try rebooting and running the installer again."
+        exit 1
+    fi
+
     sleep 3
 
     # Add passwordless sudo for docker so it works immediately
@@ -191,9 +289,15 @@ install_git() {
         return 0
     fi
     print_info "Installing Git..."
-    sudo pacman -Sy --noconfirm git 2>/dev/null || \
-    sudo apt-get install -y git 2>/dev/null || true
-    print_success "Git installed!"
+
+    if sudo pacman -Sy --noconfirm git; then
+        print_success "Git installed!"
+    elif sudo apt-get install -y git; then
+        print_success "Git installed!"
+    else
+        print_warning "Git installation failed — some features may not work."
+        print_info "Try manually: sudo pacman -Sy git"
+    fi
 }
 
 # ─────────────────────────────────────────
@@ -384,12 +488,12 @@ show_summary() {
     echo -e "  ${WHITE}${BOLD}Modules:${NC}"
     local any_module=false
 
-    [ "$MOD_AHBOT" = true ]        && echo -e "    ${GREEN}✅${NC} Auction House Bot" && any_module=true
-    [ "$MOD_PROGRESSION" = true ]  && echo -e "    ${GREEN}✅${NC} Individual Progression" && any_module=true
-    [ "$MOD_DUNGEON_MASTER" = true ] && echo -e "    ${GREEN}✅${NC} Dungeon Master" && any_module=true
-    [ "$MOD_SOLOCRAFT" = true ]    && echo -e "    ${GREEN}✅${NC} Solocraft" && any_module=true
-    [ "$MOD_BOT_WANDER" = true ]   && echo -e "    ${GREEN}✅${NC} Wandering Bots (500)" && any_module=true
-    [ "$any_module" = false ]      && echo -e "    ${YELLOW}None selected${NC}"
+    [ "$MOD_AHBOT" = true ]          && echo -e "    ${GREEN}✅${NC} Auction House Bot"    && any_module=true
+    [ "$MOD_PROGRESSION" = true ]    && echo -e "    ${GREEN}✅${NC} Individual Progression" && any_module=true
+    [ "$MOD_DUNGEON_MASTER" = true ] && echo -e "    ${GREEN}✅${NC} Dungeon Master"        && any_module=true
+    [ "$MOD_SOLOCRAFT" = true ]      && echo -e "    ${GREEN}✅${NC} Solocraft"             && any_module=true
+    [ "$MOD_BOT_WANDER" = true ]     && echo -e "    ${GREEN}✅${NC} Wandering Bots (500)"  && any_module=true
+    [ "$any_module" = false ]        && echo -e "    ${YELLOW}None selected${NC}"
 
     echo ""
 
@@ -479,18 +583,15 @@ EOF
                 print_info "Using pre-built NPCBots images..."
                 print_info "Downloading AzerothCore NPCBots..."
 
-                # Clone trickerer fork for SQL files and config
                 git clone --depth 1 \
                     https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots.git \
                     "$SERVER_DIR"
 
-                # Save SQL files
                 mkdir -p "$HOME/npcbots-sql"
                 cp -r "$SERVER_DIR/data/sql/custom/db_auth" "$HOME/npcbots-sql/"
                 cp -r "$SERVER_DIR/data/sql/custom/db_characters" "$HOME/npcbots-sql/"
                 cp -r "$SERVER_DIR/data/sql/custom/db_world" "$HOME/npcbots-sql/"
 
-                # Replace with standard acore-docker for pre-built images
                 sudo rm -rf "$SERVER_DIR"
                 git clone --depth 1 \
                     https://github.com/azerothcore/acore-docker.git \
@@ -503,20 +604,22 @@ services:
       - "8181:80"
 EOF
 
-                # Pull and start
                 cd "$SERVER_DIR"
-                docker compose pull
-                docker compose up -d --scale phpmyadmin=0
+                if ! docker compose pull; then
+                    print_error "Failed to download NPCBots images."
+                    exit 1
+                fi
+                if ! docker compose up -d --scale phpmyadmin=0; then
+                    print_error "Failed to start NPCBots server."
+                    exit 1
+                fi
 
             else
-                # Compile from source
                 print_info "Cloning NPCBots source (this is a big download)..."
                 git clone --depth 1 \
                     https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots.git \
                     "$SERVER_DIR"
 
-                # Create override with unique image tags
-                # Prevents NPCBots images overwriting Base WoW or Playerbots
                 cat > "$SERVER_DIR/docker-compose.override.yml" << 'OVERRIDE'
 services:
   ac-worldserver:
@@ -568,7 +671,6 @@ OVERRIDE
             print_warning "This will take 2-4 hours to compile!"
             print_info "Keep your Steam Deck plugged in!"
 
-            # Use the official maintained fork — NOT liyunfan1223
             git clone \
                 https://github.com/mod-playerbots/azerothcore-wotlk.git \
                 --branch=Playerbot \
@@ -579,16 +681,12 @@ OVERRIDE
                 exit 1
             fi
 
-            # Clone the official mod-playerbots module
             print_info "Cloning mod-playerbots module..."
             git clone --depth 1 \
                 https://github.com/mod-playerbots/mod-playerbots.git \
                 --branch=master \
                 "$SERVER_DIR/modules/mod-playerbots"
 
-            # Create override that MOUNTS modules at compile time
-            # This is the key — modules must be mounted during build
-            # NOT dropped in after — C++ modules compile into the binary
             cat > "$SERVER_DIR/docker-compose.override.yml" << 'OVERRIDE'
 services:
   ac-worldserver:
@@ -635,43 +733,50 @@ install_modules_base() {
 
     if [ "$MOD_AHBOT" = true ]; then
         print_info "Installing AH Bot..."
-        git clone --depth 1 \
+        if git clone --depth 1 \
             https://github.com/azerothcore/mod-ah-bot.git \
-            "$modules_dir/mod-ah-bot" 2>/dev/null && \
-            print_success "AH Bot installed!" || \
-            print_warning "AH Bot install failed — add manually later"
+            "$modules_dir/mod-ah-bot"; then
+            print_success "AH Bot installed!"
+        else
+            print_warning "AH Bot install failed — check your connection and add manually later"
+        fi
     fi
 
     if [ "$MOD_PROGRESSION" = true ]; then
         print_info "Installing Individual Progression..."
-        git clone --depth 1 \
+        if git clone --depth 1 \
             https://github.com/ZhengPeiRu21/mod-individual-progression.git \
-            "$modules_dir/mod-individual-progression" 2>/dev/null && \
-            print_success "Individual Progression installed!" || \
-            print_warning "Individual Progression failed — add manually later"
+            "$modules_dir/mod-individual-progression"; then
+            print_success "Individual Progression installed!"
+        else
+            print_warning "Individual Progression failed — check your connection and add manually later"
+        fi
     fi
 
     if [ "$MOD_DUNGEON_MASTER" = true ]; then
         print_info "Installing Dungeon Master..."
-        git clone --depth 1 \
+        if git clone --depth 1 \
             https://github.com/InstanceForge/mod-dungeon-master.git \
-            "$modules_dir/mod-dungeon-master" 2>/dev/null && \
-            print_success "Dungeon Master installed!" || \
-            print_warning "Dungeon Master failed — add manually later"
+            "$modules_dir/mod-dungeon-master"; then
+            print_success "Dungeon Master installed!"
+        else
+            print_warning "Dungeon Master failed — check your connection and add manually later"
+        fi
     fi
 
     if [ "$MOD_SOLOCRAFT" = true ]; then
         print_info "Installing Solocraft..."
-        git clone --depth 1 \
+        if git clone --depth 1 \
             https://github.com/azerothcore/mod-solocraft.git \
-            "$modules_dir/mod-solocraft" 2>/dev/null && \
-            print_success "Solocraft installed!" || \
-            print_warning "Solocraft failed — add manually later"
+            "$modules_dir/mod-solocraft"; then
+            print_success "Solocraft installed!"
+        else
+            print_warning "Solocraft failed — check your connection and add manually later"
+        fi
     fi
 }
 
 install_modules_npcbots() {
-    # Apply NPCBots SQL if we have them
     if [ -d "$HOME/npcbots-sql" ] && [ "$BUILD_METHOD" = "prebuilt" ]; then
         print_info "Waiting for database to be ready..."
         sleep 15
@@ -680,19 +785,39 @@ install_modules_npcbots() {
         DB_CONTAINER="${DB_CONTAINER:-wow-server-ac-database-1}"
 
         print_info "Applying NPCBots database files..."
+
+        local sql_errors=0
+
         for f in "$HOME/npcbots-sql/db_auth/"*.sql; do
-            docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_auth < "$f" 2>/dev/null || true
+            if ! docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_auth < "$f" 2>/dev/null; then
+                print_warning "SQL failed: $(basename "$f")"
+                sql_errors=$((sql_errors + 1))
+            fi
         done
+
         for f in "$HOME/npcbots-sql/db_characters/"*.sql; do
-            docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_characters < "$f" 2>/dev/null || true
+            if ! docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_characters < "$f" 2>/dev/null; then
+                print_warning "SQL failed: $(basename "$f")"
+                sql_errors=$((sql_errors + 1))
+            fi
         done
+
         for f in "$HOME/npcbots-sql/db_world/"*.sql; do
-            docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_world < "$f" 2>/dev/null || true
+            if ! docker exec -i "$DB_CONTAINER" mysql -uroot -ppassword acore_world < "$f" 2>/dev/null; then
+                print_warning "SQL failed: $(basename "$f")"
+                sql_errors=$((sql_errors + 1))
+            fi
         done
-        print_success "NPCBots database applied!"
+
+        if [ "$sql_errors" -gt 0 ]; then
+            print_warning "$sql_errors SQL file(s) failed to apply."
+            print_info "NPCBots features may be incomplete."
+            print_info "Check manually via phpMyAdmin at http://localhost:8181"
+        else
+            print_success "NPCBots database applied!"
+        fi
     fi
 
-    # Apply other modules as SQL where possible
     if [ "$MOD_AHBOT" = true ]; then
         print_info "AH Bot module noted — configure via worldserver.conf"
     fi
@@ -836,10 +961,18 @@ if [ -n "\$WOW_CONTAINERS" ]; then
 fi
 
 cd "${server_dir}" || exit 1
-docker compose up -d --scale phpmyadmin=0 >> "\$LOGFILE" 2>&1 || \
-docker compose up -d >> "\$LOGFILE" 2>&1
 
-echo "  Containers started!"
+if docker compose up -d --scale phpmyadmin=0 >> "\$LOGFILE" 2>&1; then
+    echo "  Containers started!"
+elif docker compose up -d >> "\$LOGFILE" 2>&1; then
+    echo "  Containers started (phpmyadmin fallback used)"
+else
+    echo "  ERR: Failed to start server."
+    echo "  Check: \$LOGFILE"
+    sleep 10
+    exit 1
+fi
+
 echo ""
 echo "  Waiting for world to initialize..."
 echo "  First launch: 5-15 minutes"
@@ -1033,7 +1166,7 @@ show_completion() {
     read -r STOP_NOW
     if [[ "$STOP_NOW" =~ ^[Yy]$ ]]; then
         print_info "Stopping server..."
-        cd "$SERVER_DIR" && docker compose down 2>/dev/null
+        cd "$SERVER_DIR" && docker compose down
         print_success "Server stopped! Use Gaming Mode launcher to start it next time."
     else
         print_info "Server left running — enjoy Azeroth! ⚔️"
