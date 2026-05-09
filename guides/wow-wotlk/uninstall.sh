@@ -24,9 +24,9 @@
 #  Make a backup first if you want to keep your character data!
 # ============================================================
 
-# ─────────────────────────────────────────
 INSTALLER_VERSION="1.2.0"
 
+# ─────────────────────────────────────────
 # COLORS
 # ─────────────────────────────────────────
 RED='\033[0;31m'
@@ -73,6 +73,28 @@ ask_yes_no() {
     done
 }
 
+# ─────────────────────────────────────────
+# SAFE RM -RF — never deletes protected paths
+# ─────────────────────────────────────────
+safe_rm_rf() {
+    local target="$1"
+    local label="$2"
+    if [ -z "$target" ]; then
+        print_error "Refusing to delete: path is empty!"
+        return 1
+    fi
+    if [ "$target" = "/" ] || [ "$target" = "$HOME" ] || [ "$target" = "/home" ]; then
+        print_error "Refusing to delete: '$target' is a protected path!"
+        return 1
+    fi
+    if [[ "$target" != "$HOME/"* ]]; then
+        print_error "Refusing to delete '$target' — not inside home directory!"
+        return 1
+    fi
+    sudo rm -rf "$target"
+    print_success "Removed $label: $target"
+}
+
 INSTALL_DIR="$HOME/wow-server"
 NPCBOTS_DIR="$HOME/wow-server-npcbots"
 PLAYERBOTS_DIR="$HOME/wow-server-playerbots"
@@ -88,7 +110,10 @@ fi
 
 if ! docker ps &>/dev/null 2>&1 && ! sudo docker ps &>/dev/null 2>&1; then
     echo -e "\033[1;33m⚠️  Docker is installed but not running. Starting it now...\033[0m"
-    sudo systemctl start docker 2>/dev/null || true
+    if ! sudo systemctl start docker 2>/dev/null; then
+        echo -e "\033[0;31m❌ Docker failed to start. Try rebooting your Steam Deck and running this again.\033[0m"
+        exit 1
+    fi
     sleep 3
 fi
 
@@ -104,7 +129,6 @@ print_header
 echo -e "${WHITE}${BOLD}Which server do you want to uninstall?${NC}"
 echo ""
 
-# Detect which servers are installed
 STANDARD_EXISTS=false
 NPCBOTS_EXISTS=false
 PLAYERBOTS_EXISTS=false
@@ -113,7 +137,6 @@ PLAYERBOTS_EXISTS=false
 [ -d "$NPCBOTS_DIR" ]      && NPCBOTS_EXISTS=true
 [ -d "$PLAYERBOTS_DIR" ]   && PLAYERBOTS_EXISTS=true
 
-# Build menu dynamically based on what's installed
 MENU_OPTIONS=()
 [ "$STANDARD_EXISTS" = true ]   && MENU_OPTIONS+=("Standard WoW ($INSTALL_DIR)")
 [ "$NPCBOTS_EXISTS" = true ]    && MENU_OPTIONS+=("NPCBots WoW ($NPCBOTS_DIR)")
@@ -128,14 +151,12 @@ if [ ${#MENU_OPTIONS[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Show available options
 OPTION_NUM=1
 for opt in "${MENU_OPTIONS[@]}"; do
     echo -e "  ${CYAN}${OPTION_NUM})${NC} $opt"
     OPTION_NUM=$((OPTION_NUM + 1))
 done
 
-# Only show ALL option if more than one server installed
 INSTALLED_COUNT=${#MENU_OPTIONS[@]}
 if [ $INSTALLED_COUNT -gt 1 ]; then
     echo -e "  ${CYAN}${OPTION_NUM})${NC} ALL servers"
@@ -145,18 +166,15 @@ echo ""
 echo -e "${WHITE}Choice (1-${OPTION_NUM}): ${NC}"
 read -r SERVER_CHOICE
 
-# Map choice to target dirs and names
 TARGET_DIRS=()
 TARGET_NAMES=()
 
 if [ $INSTALLED_COUNT -eq 1 ]; then
-    # Only one server — use it regardless of input
-    [ "$STANDARD_EXISTS" = true ]   && TARGET_DIRS=("$INSTALL_DIR")   && TARGET_NAMES=("Standard WoW")
-    [ "$NPCBOTS_EXISTS" = true ]    && TARGET_DIRS=("$NPCBOTS_DIR")   && TARGET_NAMES=("NPCBots WoW")
+    [ "$STANDARD_EXISTS" = true ]   && TARGET_DIRS=("$INSTALL_DIR")    && TARGET_NAMES=("Standard WoW")
+    [ "$NPCBOTS_EXISTS" = true ]    && TARGET_DIRS=("$NPCBOTS_DIR")    && TARGET_NAMES=("NPCBots WoW")
     [ "$PLAYERBOTS_EXISTS" = true ] && TARGET_DIRS=("$PLAYERBOTS_DIR") && TARGET_NAMES=("Playerbots WoW")
     SERVER_CHOICE="1"
 else
-    # Multiple servers — map number to correct dir
     COUNTER=1
     declare -A CHOICE_MAP
     [ "$STANDARD_EXISTS" = true ]   && CHOICE_MAP[$COUNTER]="standard"   && COUNTER=$((COUNTER + 1))
@@ -165,7 +183,6 @@ else
     ALL_CHOICE=$COUNTER
 
     if [ "$SERVER_CHOICE" = "$ALL_CHOICE" ]; then
-        # ALL selected
         [ "$STANDARD_EXISTS" = true ]   && TARGET_DIRS+=("$INSTALL_DIR")    && TARGET_NAMES+=("Standard WoW")
         [ "$NPCBOTS_EXISTS" = true ]    && TARGET_DIRS+=("$NPCBOTS_DIR")    && TARGET_NAMES+=("NPCBots WoW")
         [ "$PLAYERBOTS_EXISTS" = true ] && TARGET_DIRS+=("$PLAYERBOTS_DIR") && TARGET_NAMES+=("Playerbots WoW")
@@ -216,6 +233,7 @@ else
     KEEP_CLIENT_DATA=false
     print_info "Client data will be removed — reinstall will re-download everything."
 fi
+
 echo ""
 print_warning "Do you want to back up your character data first?"
 echo -e "${BLUE}ℹ️  This saves your characters, items, and progress to a backup file.${NC}"
@@ -233,18 +251,20 @@ if ask_yes_no "Create a backup before uninstalling?"; then
     if docker ps 2>/dev/null | grep -qiE "ac.database|ac_database" || \
        sudo docker ps 2>/dev/null | grep -qiE "ac.database|ac_database"; then
 
-        # Detect actual container name
-        BACKUP_DB=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "ac.database|ac_database" | head -1)
+        BACKUP_DB=$(docker ps --format '{{.Names}}' 2>/dev/null | \
+            grep -iE "ac.database|ac_database" | head -1)
         BACKUP_DB="${BACKUP_DB:-acore-docker-ac-database-1}"
 
-        docker exec "$BACKUP_DB" mysqldump \
+        # Let mysqldump stderr show — user needs to know WHY it failed if it does
+        if ! docker exec "$BACKUP_DB" mysqldump \
             -uroot -ppassword \
             --databases acore_characters acore_auth acore_world \
-            > "$BACKUP_DIR/full_server_backup.sql" 2>/dev/null || \
-        sudo docker exec "$BACKUP_DB" mysqldump \
-            -uroot -ppassword \
-            --databases acore_characters acore_auth acore_world \
-            > "$BACKUP_DIR/full_server_backup.sql" 2>/dev/null || true
+            > "$BACKUP_DIR/full_server_backup.sql"; then
+            sudo docker exec "$BACKUP_DB" mysqldump \
+                -uroot -ppassword \
+                --databases acore_characters acore_auth acore_world \
+                > "$BACKUP_DIR/full_server_backup.sql" || true
+        fi
 
         if [ -f "$BACKUP_DIR/full_server_backup.sql" ] && \
            [ -s "$BACKUP_DIR/full_server_backup.sql" ]; then
@@ -254,7 +274,7 @@ if ask_yes_no "Create a backup before uninstalling?"; then
             print_info "Keep this file — it contains ALL your characters, items and progress!"
         else
             print_warning "Backup file is empty or missing — database may not be running."
-            print_info "Start the server first with: cd ~/wow-server && ./start.sh"
+            print_info "Start the server first with: cd ~/wow-server && docker compose up -d"
             print_info "Then re-run this uninstaller to get a clean backup."
             BACKUP_DIR=""
         fi
@@ -312,8 +332,12 @@ for i in "${!TARGET_DIRS[@]}"; do
     print_info "Stopping $name..."
     if [ -f "$dir/docker-compose.yml" ]; then
         cd "$dir"
-        docker compose down --remove-orphans 2>/dev/null || \
-        sudo docker compose down --remove-orphans 2>/dev/null || true
+        if ! docker compose down --remove-orphans 2>/dev/null; then
+            if ! sudo docker compose down --remove-orphans 2>/dev/null; then
+                print_warning "$name containers may still be running — proceeding anyway."
+                print_info "Stop them manually later with: docker compose down"
+            fi
+        fi
         print_success "$name stopped"
     fi
 done
@@ -321,7 +345,7 @@ done
 print_info "Cleaning up orphaned containers..."
 docker ps -a --format '{{.Names}}' 2>/dev/null | \
     grep -iE "worldserver|authserver|ac-database|ac-eluna|ac-client|ac-db" | \
-    xargs -r docker rm -f 2>/dev/null || true
+    xargs -r docker rm -f || true
 print_success "Containers cleaned up"
 
 # ─────────────────────────────────────────
@@ -365,7 +389,6 @@ VOLUMES=(
     "ac-database"
 )
 
-# Only remove client data volumes if user chose to wipe them
 if [ "$KEEP_CLIENT_DATA" = false ]; then
     VOLUMES+=(
         "wow-server_ac-client-data"
@@ -385,7 +408,6 @@ for vol in "${VOLUMES[@]}"; do
     fi
 done
 
-# Remove orphaned volumes — skip if keeping client data
 if [ "$KEEP_CLIENT_DATA" = false ]; then
     print_info "Cleaning up orphaned volumes..."
     docker volume prune -f 2>/dev/null || true
@@ -408,8 +430,7 @@ for i in "${!TARGET_DIRS[@]}"; do
     dir="${TARGET_DIRS[$i]}"
     name="${TARGET_NAMES[$i]}"
     if [ -d "$dir" ]; then
-        sudo rm -rf "$dir"
-        print_success "Removed $name folder: $dir"
+        safe_rm_rf "$dir" "$name folder"
     else
         print_info "$name folder not found — already removed"
     fi
@@ -453,8 +474,6 @@ fi
 
 echo -e "${WHITE}Want to reinstall? Run:${NC}"
 echo -e "  ${CYAN}Wizard (recommended): chmod +x install-wow.sh && ./install-wow.sh${NC}"
-echo -e "  ${CYAN}Standard WoW:         chmod +x install.sh && ./install.sh${NC}"
-echo -e "  ${CYAN}NPCBots WoW:          chmod +x install-npcbots.sh && ./install-npcbots.sh${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}  📺 youtube.com/@DadsMmoLab${NC}"
